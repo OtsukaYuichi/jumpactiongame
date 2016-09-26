@@ -11,6 +11,7 @@ import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.Sprite;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
+import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.viewport.FitViewport;
 
@@ -23,6 +24,8 @@ public class GameScreen extends ScreenAdapter {
     static final float CAMERA_HEIGHT = 15;
     static final float WORLD_WIDTH = 10;
     static final float WORLD_HEIGHT = 15 * 20; // 20画面分登れば終了
+    static final float GUI_WIDTH = 320;
+    static final float GUI_HEIGHT = 480;
 
     static final int GAME_STATE_READY = 0;
     static final int GAME_STATE_PLAYING = 1;
@@ -35,7 +38,9 @@ public class GameScreen extends ScreenAdapter {
 
     Sprite mBg;
     OrthographicCamera mCamera;
+    OrthographicCamera mGuiCamera;
     FitViewport mViewPort;
+    FitViewport mGuiViewPort;
 
     Random mRandom;
     List<Step> mSteps;
@@ -44,7 +49,7 @@ public class GameScreen extends ScreenAdapter {
     Player mPlayer;
 
     int mGameState;
-    float mHeightsSFar;
+    float mHeightSoFar;
     Vector3 mTouchPoint;
 
     public GameScreen(JumpActionGame game) {
@@ -62,6 +67,11 @@ public class GameScreen extends ScreenAdapter {
         mCamera.setToOrtho(false, CAMERA_WIDTH, CAMERA_HEIGHT);
         mViewPort = new FitViewport(CAMERA_WIDTH, CAMERA_HEIGHT, mCamera);
 
+        // GUI用のカメラを設定する
+        mGuiCamera = new OrthographicCamera();
+        mGuiCamera.setToOrtho(false, GUI_WIDTH, GUI_HEIGHT);
+        mGuiViewPort = new FitViewport(GUI_WIDTH, GUI_HEIGHT, mGuiCamera);
+
         // メンバ変数の初期化
         mRandom = new Random();
         mSteps = new ArrayList<Step>();
@@ -74,11 +84,17 @@ public class GameScreen extends ScreenAdapter {
 
     @Override
     public void render(float delta) {
+        // それぞれの状態をアップデートする
+        update(delta);
+
+        // /描画する
         Gdx.gl.glClearColor(0, 0, 0, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
-        // それぞれの状態をアップデートする
-        update(delta);
+        // カメラを上方に移動させる
+        if (mPlayer.getY() > mCamera.position.y) {
+            mCamera.position.y = mPlayer.getY();
+        }
 
         // カメラの座標をアップデート（計算）し、スプライトの表示に反映させる
         mCamera.update();
@@ -113,6 +129,7 @@ public class GameScreen extends ScreenAdapter {
     @Override
     public void resize(int width, int height) {
         mViewPort.update(width, height);
+        mGuiViewPort.update(width, height);
     }
 
     // ステージを作成する
@@ -159,14 +176,99 @@ public class GameScreen extends ScreenAdapter {
     private void update(float delta) {
         switch (mGameState) {
             case GAME_STATE_READY:
-                //updateReady();
+                updateReady();
                 break;
             case GAME_STATE_PLAYING:
-                //updatePlaying(delta);
+                updatePlaying(delta);
                 break;
             case GAME_STATE_GAMEOVER:
-                //updateGameOver();
+                updateGameOver();
                 break;
+        }
+    }
+
+    private void updateReady() {
+        if (Gdx.input.justTouched()) {
+            mGameState = GAME_STATE_PLAYING;
+        }
+    }
+
+    private void updatePlaying(float delta) {
+        float accel = 0;
+        if (Gdx.input.isTouched()) {
+            mGuiViewPort.unproject(mTouchPoint.set(Gdx.input.getX(), Gdx.input.getY(), 0));
+            Rectangle left = new Rectangle(0, 0, GUI_WIDTH / 2, GUI_HEIGHT);
+            Rectangle right = new Rectangle(GUI_WIDTH / 2, 0, GUI_WIDTH, GUI_HEIGHT);
+            if (left.contains(mTouchPoint.x, mTouchPoint.y)) {
+                accel = 5.0f;
+            }
+            if (right.contains(mTouchPoint.x, mTouchPoint.y)) {
+                accel = -5.0f;
+            }
+        }
+
+
+        // Step
+        for (int i = 0; i < mSteps.size(); i++) {
+            mSteps.get(i).update(delta);
+        }
+
+        // Player
+        if (mPlayer.getY() <= Player.PLAYER_HEIGHT / 2) {
+            mPlayer.hitStep();
+        }
+        mPlayer.update(delta, accel);
+        mHeightSoFar = Math.max(mPlayer.getY(), mHeightSoFar);
+
+        // 当たり判定を行う
+        checkCollision();
+    }
+
+    private void updateGameOver() {
+    }
+
+    private void checkCollision() {
+        // UFO（ゴール）との当たり判定
+        if (mPlayer.getBoundingRectangle().overlaps(mUfo.getBoundingRectangle())) {
+            mGameState = GAME_STATE_GAMEOVER;
+            return;
+        }
+
+        //Star（得点）との当たり判定
+        for (int i = 0; i < mStars.size(); i++) {
+            Star star = mStars.get(i);
+
+            if (star.mState == Star.STAR_NONE) {
+                continue;
+            }
+
+            if (mPlayer.getBoundingRectangle().overlaps(star.getBoundingRectangle())) {
+                star.get();
+                break;
+            }
+        }
+
+        //Stepとの当たり判定。上昇中は当たらないことにする。
+        if (mPlayer.velocity.y > 0) {
+            return;
+        }
+
+        for (int i = 0; i < mSteps.size(); i++) {
+            Step step = mSteps.get(i);
+
+            if (step.mState == Step.STEP_STATE_VANISH) {
+                continue;
+            }
+
+            if (mPlayer.getY() > step.getY()) {
+                if (mPlayer.getBoundingRectangle().overlaps(step.getBoundingRectangle())) {
+                    mPlayer.hitStep();
+                    if (mRandom.nextFloat() > 0.5f) {
+                        step.vanish();
+                    }
+                    break;
+                }
+            }
         }
     }
 }
