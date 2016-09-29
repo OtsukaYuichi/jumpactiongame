@@ -5,15 +5,18 @@ package jp.techacademy.yuichi.otsuka.jumpactiongame;
  */
 
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Preferences;
 import com.badlogic.gdx.ScreenAdapter;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.Sprite;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.Rectangle;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.viewport.FitViewport;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,7 +26,7 @@ public class GameScreen extends ScreenAdapter {
     static final float CAMERA_WIDTH = 10;
     static final float CAMERA_HEIGHT = 15;
     static final float WORLD_WIDTH = 10;
-    static final float WORLD_HEIGHT = 15 * 20; // 20画面分登れば終了
+    static final float WORLD_HEIGHT = 15 * 20;
     static final float GUI_WIDTH = 320;
     static final float GUI_HEIGHT = 480;
 
@@ -39,18 +42,22 @@ public class GameScreen extends ScreenAdapter {
     Sprite mBg;
     OrthographicCamera mCamera;
     OrthographicCamera mGuiCamera;
+
     FitViewport mViewPort;
     FitViewport mGuiViewPort;
 
     Random mRandom;
     List<Step> mSteps;
-    List<Star> mStars;//配置した星の数
+    List<Star> mStars;
     Ufo mUfo;
     Player mPlayer;
-
-    int mGameState;
     float mHeightSoFar;
+    int mGameState;
     Vector3 mTouchPoint;
+    BitmapFont mFont;
+    int mScore;
+    int mHighScore;
+    Preferences mPrefs;
 
     public GameScreen(JumpActionGame game) {
         mGame = game;
@@ -78,20 +85,28 @@ public class GameScreen extends ScreenAdapter {
         mStars = new ArrayList<Star>();
         mGameState = GAME_STATE_READY;
         mTouchPoint = new Vector3();
+        mFont = new BitmapFont(Gdx.files.internal("font.fnt"), Gdx.files.internal("font.png"), false);
+        mFont.getData().setScale(0.8f);
+        mScore = 0;
+        mHighScore = 0;
+
+        //ハイスコアをpreferenceから取得する
+        mPrefs = Gdx.app.getPreferences("package jp.techacademy.yuichi.otsuka.jumpactiongame");
+        mHighScore = mPrefs.getInteger("HIGHSCORE", 0);
 
         createStage();
     }
 
     @Override
     public void render(float delta) {
-        // それぞれの状態をアップデートする
+        // 状態を更新する
         update(delta);
 
-        // /描画する
+        // 描画する
         Gdx.gl.glClearColor(0, 0, 0, 1);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
-        // カメラを上方に移動させる
+        // カメラの中心を超えたらカメラを上に移動させる つまりキャラが画面の上半分には絶対に行かない
         if (mPlayer.getY() > mCamera.position.y) {
             mCamera.position.y = mPlayer.getY();
         }
@@ -124,6 +139,15 @@ public class GameScreen extends ScreenAdapter {
         mPlayer.draw(mGame.batch);
 
         mGame.batch.end();
+
+        // スコア表示
+        mGuiCamera.update();
+        mGame.batch.setProjectionMatrix(mGuiCamera.combined);
+        mGame.batch.begin();
+        mFont.draw(mGame.batch, "HighScore: " + mHighScore, 16, GUI_HEIGHT - 15);
+        mFont.draw(mGame.batch, "Score: " + mScore, 16, GUI_HEIGHT - 35);
+        mGame.batch.end();
+
     }
 
     @Override
@@ -146,7 +170,7 @@ public class GameScreen extends ScreenAdapter {
 
         float maxJumpHeight = Player.PLAYER_JUMP_VELOCITY * Player.PLAYER_JUMP_VELOCITY / (2 * -GRAVITY);
         while (y < WORLD_HEIGHT - 5) {
-            int type = mRandom.nextFloat() > 0.8f ? Step.STEP_TYPE_MOVING : Step.STEP_TYPE_STATIC;// ? の前の条件式がtrue か false かによって : の前or後の値を返す
+            int type = mRandom.nextFloat() > 0.8f ? Step.STEP_TYPE_MOVING : Step.STEP_TYPE_STATIC;
             float x = mRandom.nextFloat() * (WORLD_WIDTH - Step.STEP_WIDTH);
 
             Step step = new Step(type, stepTexture, 0, 0, 144, 36);
@@ -198,7 +222,7 @@ public class GameScreen extends ScreenAdapter {
         if (Gdx.input.isTouched()) {
             mGuiViewPort.unproject(mTouchPoint.set(Gdx.input.getX(), Gdx.input.getY(), 0));
             Rectangle left = new Rectangle(0, 0, GUI_WIDTH / 2, GUI_HEIGHT);
-            Rectangle right = new Rectangle(GUI_WIDTH / 2, 0, GUI_WIDTH, GUI_HEIGHT);
+            Rectangle right = new Rectangle(GUI_WIDTH / 2, 0, GUI_WIDTH / 2, GUI_HEIGHT);
             if (left.contains(mTouchPoint.x, mTouchPoint.y)) {
                 accel = 5.0f;
             }
@@ -207,14 +231,13 @@ public class GameScreen extends ScreenAdapter {
             }
         }
 
-
         // Step
         for (int i = 0; i < mSteps.size(); i++) {
             mSteps.get(i).update(delta);
         }
 
         // Player
-        if (mPlayer.getY() <= Player.PLAYER_HEIGHT / 2) {
+        if (mPlayer.getY() <= 0.5f) {
             mPlayer.hitStep();
         }
         mPlayer.update(delta, accel);
@@ -222,19 +245,25 @@ public class GameScreen extends ScreenAdapter {
 
         // 当たり判定を行う
         checkCollision();
+
+        // ゲームオーバーか判断する
+        checkGameOver();
     }
 
     private void updateGameOver() {
+        if (Gdx.input.justTouched()) {
+            mGame.setScreen(new ResultScreen(mGame, mScore));
+        }
     }
 
     private void checkCollision() {
-        // UFO（ゴール）との当たり判定
+        // UFO(ゴールとの当たり判定)
         if (mPlayer.getBoundingRectangle().overlaps(mUfo.getBoundingRectangle())) {
             mGameState = GAME_STATE_GAMEOVER;
             return;
         }
 
-        //Star（得点）との当たり判定
+        // Starとの当たり判定
         for (int i = 0; i < mStars.size(); i++) {
             Star star = mStars.get(i);
 
@@ -244,11 +273,19 @@ public class GameScreen extends ScreenAdapter {
 
             if (mPlayer.getBoundingRectangle().overlaps(star.getBoundingRectangle())) {
                 star.get();
+                mScore++;
+                if (mScore > mHighScore) {
+                    mHighScore = mScore;
+
+                    mPrefs.putInteger("HIGHSCORE", mHighScore);
+                    mPrefs.flush();
+                }
                 break;
             }
         }
 
-        //Stepとの当たり判定。上昇中は当たらないことにする。
+        // Stepとの当たり判定
+        // 上昇中はStepとの当たり判定を確認しない
         if (mPlayer.velocity.y > 0) {
             return;
         }
@@ -269,6 +306,13 @@ public class GameScreen extends ScreenAdapter {
                     break;
                 }
             }
+        }
+    }
+
+    private void checkGameOver() {
+        if (mHeightSoFar - CAMERA_HEIGHT / 2 > mPlayer.getY()) {
+            Gdx.app.log("JampActionGame", "GAMEOVER");
+            mGameState = GAME_STATE_GAMEOVER;
         }
     }
 }

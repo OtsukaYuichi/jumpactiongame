@@ -1,10 +1,10 @@
 package jp.techacademy.yuichi.otsuka.jumpactiongame;
 
-import com.badlogic.gdx.graphics.Texture;
-
 /**
  * Created by OtsukaYuichi on 2016/09/22.
  */
+
+import com.badlogic.gdx.graphics.Texture;
 
 public class Ufo extends GameObject {
     // UFOの横幅、高さ
